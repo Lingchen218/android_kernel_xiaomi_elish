@@ -157,61 +157,36 @@ static struct page *erofs_read_inode(struct inode *inode,
 		i_gid_write(inode, le16_to_cpu(dic->i_gid));
 		set_nlink(inode, le16_to_cpu(dic->i_nlink));
 
-		/* use build time for compact inodes */
-		inode->i_ctime.tv_sec = sbi->build_time;
-		inode->i_ctime.tv_nsec = sbi->build_time_nsec;
+		/* use build time to derive all file time */
+		inode->i_mtime.tv_sec = inode->i_ctime.tv_sec =
+			sbi->build_time;
+		inode->i_mtime.tv_nsec = inode->i_ctime.tv_nsec =
+			sbi->build_time_nsec;
 
-		inode->i_size = le32_to_cpu(dic->i_size);
-		if (erofs_inode_is_data_compressed(vi->datalayout))
-			nblks = le32_to_cpu(dic->i_u.compressed_blocks);
-		else if (vi->datalayout == EROFS_INODE_CHUNK_BASED)
-			vi->chunkformat = le16_to_cpu(dic->i_u.c.format);
-		break;
-	default:
-		erofs_err(inode->i_sb,
-			  "unsupported on-disk inode version %u of nid %llu",
-			  erofs_inode_version(ifmt), vi->nid);
-		err = -EOPNOTSUPP;
-		goto err_out;
+		inode->i_size = le32_to_cpu(v1->i_size);
+	} else {
+		errln("unsupported on-disk inode version %u of nid %llu",
+			__inode_version(advise), vi->nid);
+		DBG_BUGON(1);
+		return -EIO;
 	}
 
-	if (vi->datalayout == EROFS_INODE_CHUNK_BASED) {
-		if (vi->chunkformat & ~EROFS_CHUNK_FORMAT_ALL) {
-			erofs_err(inode->i_sb,
-				  "unsupported chunk format %x of nid %llu",
-				  vi->chunkformat, vi->nid);
-			err = -EOPNOTSUPP;
-			goto err_out;
-		}
-		vi->chunkbits = LOG_BLOCK_SIZE +
-			(vi->chunkformat & EROFS_CHUNK_FORMAT_BLKBITS_MASK);
-	}
-	inode->i_mtime.tv_sec = inode->i_ctime.tv_sec;
-	inode->i_atime.tv_sec = inode->i_ctime.tv_sec;
-	inode->i_mtime.tv_nsec = inode->i_ctime.tv_nsec;
-	inode->i_atime.tv_nsec = inode->i_ctime.tv_nsec;
-
-	if (!nblks)
-		/* measure inode.i_blocks as generic filesystems */
-		inode->i_blocks = roundup(inode->i_size, EROFS_BLKSIZ) >> 9;
-	else
-		inode->i_blocks = nblks << LOG_SECTORS_PER_BLOCK;
-	return page;
-
-bogusimode:
-	erofs_err(inode->i_sb, "bogus i_mode (%o) @ nid %llu",
-		  inode->i_mode, vi->nid);
-	err = -EFSCORRUPTED;
-err_out:
-	DBG_BUGON(1);
-	kfree(copied);
-	unlock_page(page);
-	put_page(page);
-	return ERR_PTR(err);
+	/* measure inode.i_blocks as the generic filesystem */
+	inode->i_blocks = ((inode->i_size - 1) >> 9) + 1;
+	return 0;
 }
 
-static int erofs_fill_symlink(struct inode *inode, void *data,
-			      unsigned int m_pofs)
+/*
+ * try_lock can be required since locking order is:
+ *   file data(fs_inode)
+ *        meta(bd_inode)
+ * but the majority of the callers is "iget",
+ * in that case we are pretty sure no deadlock since
+ * no data operations exist. However I tend to
+ * try_lock since it takes no much overhead and
+ * will success immediately.
+ */
+static int fill_inline_data(struct inode *inode, void *data, unsigned m_pofs)
 {
 	struct erofs_inode *vi = EROFS_I(inode);
 	char *lnk;
