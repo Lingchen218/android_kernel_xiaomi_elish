@@ -8,8 +8,11 @@
 #include <linux/fs.h>
 #include <linux/fs_stack.h>
 #include <linux/namei.h>
+#include <linux/poll.h>
 #include <linux/parser.h>
 #include <linux/seq_file.h>
+#include <linux/types.h>  
+#include <linux/wait.h>
 
 #include <uapi/linux/incrementalfs.h>
 
@@ -19,6 +22,13 @@
 #include "format.h"
 #include "internal.h"
 #include "pseudo_files.h"
+
+#define INCFS_PENDING_READS_INODE 2
+#define INCFS_LOG_INODE 3
+#define INCFS_START_INO_RANGE 10
+#define READ_FILE_MODE 0444
+#define READ_EXEC_FILE_MODE 0555
+#define READ_WRITE_FILE_MODE 0666
 
 static int incfs_remount_fs(struct super_block *sb, int *flags, char *data);
 
@@ -318,63 +328,10 @@ static struct inode *fetch_regular_inode(struct super_block *sb,
 	return inode;
 }
 
-static ssize_t pending_reads_read(struct file *f, char __user *buf, size_t len,
-			    loff_t *ppos)
-{
-	struct pending_reads_state *pr_state = f->private_data;
-	struct mount_info *mi = get_mount_info(file_superblock(f));
-	struct incfs_pending_read_info *reads_buf = NULL;
-	size_t reads_to_collect = len / sizeof(*reads_buf);
-	int last_known_read_sn = READ_ONCE(pr_state->last_pending_read_sn);
-	int new_max_sn = last_known_read_sn;
-	int reads_collected = 0;
-	ssize_t result = 0;
-	int i = 0;
-
-	if (!incfs_fresh_pending_reads_exist(mi, last_known_read_sn))
-		return 0;
-
-	reads_buf = (struct incfs_pending_read_info *)get_zeroed_page(GFP_NOFS);
-	if (!reads_buf)
-		return -ENOMEM;
-
-	reads_to_collect =
-		min_t(size_t, PAGE_SIZE / sizeof(*reads_buf), reads_to_collect);
-
-	reads_collected = incfs_collect_pending_reads(
-		mi, last_known_read_sn, reads_buf, reads_to_collect);
-	if (reads_collected < 0) {
-		result = reads_collected;
-		goto out;
-	}
-
-	for (i = 0; i < reads_collected; i++)
-		if (reads_buf[i].serial_number > new_max_sn)
-			new_max_sn = reads_buf[i].serial_number;
-
-	/*
-	 * Just to make sure that we don't accidentally copy more data
-	 * to reads buffer than userspace can handle.
-	 */
-	reads_collected = min_t(size_t, reads_collected, reads_to_collect);
-	result = reads_collected * sizeof(*reads_buf);
-
-	/* Copy reads info to the userspace buffer */
-	if (copy_to_user(buf, reads_buf, result)) {
-		result = -EFAULT;
-		goto out;
-	}
-
-	WRITE_ONCE(pr_state->last_pending_read_sn, new_max_sn);
-	*ppos = 0;
-out:
-	if (reads_buf)
-		free_page((unsigned long)reads_buf);
-	return result;
-}
 
 
-static __poll_t pending_reads_poll(struct file *file, poll_table *wait)
+
+static __poll_t pending_reads_poll(struct file *file, struct poll_table_struct *wait)
 {
 	struct pending_reads_state *state = file->private_data;
 	struct mount_info *mi = get_mount_info(file_superblock(file));
@@ -406,8 +363,9 @@ static int pending_reads_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static struct inode *fetch_pending_reads_inode(struct super_block *sb)
+static struct inode *fetch_pending_reads_inode(struct super_block *sb,struct dentry *backing_dentry)
 {
+	// struct inode *backing_inode = d_inode(backing_dentry);
 	struct inode_search search = {
 		.ino = INCFS_PENDING_READS_INODE
 	};
@@ -443,63 +401,10 @@ static int log_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static ssize_t log_read(struct file *f, char __user *buf, size_t len,
+static ssize_t log_read_xxx(struct file *f, char __user *buf, size_t len,
 			loff_t *ppos)
 {
-	struct log_file_state *log_state = f->private_data;
-	struct mount_info *mi = get_mount_info(file_superblock(f));
-	int total_reads_collected = 0;
-	int rl_size;
-	ssize_t result = 0;
-	struct incfs_pending_read_info *reads_buf;
-	ssize_t reads_to_collect = len / sizeof(*reads_buf);
-	ssize_t reads_per_page = PAGE_SIZE / sizeof(*reads_buf);
-
-	rl_size = READ_ONCE(mi->mi_log.rl_size);
-	if (rl_size == 0)
-		return 0;
-
-	reads_buf = (struct incfs_pending_read_info *)__get_free_page(GFP_NOFS);
-	if (!reads_buf)
-		return -ENOMEM;
-
-	reads_to_collect = min_t(ssize_t, rl_size, reads_to_collect);
-	while (reads_to_collect > 0) {
-		struct read_log_state next_state;
-		int reads_collected;
-
-		memcpy(&next_state, &log_state->state, sizeof(next_state));
-		reads_collected = incfs_collect_logged_reads(
-			mi, &next_state, reads_buf,
-			min_t(ssize_t, reads_to_collect, reads_per_page));
-		if (reads_collected <= 0) {
-			result = total_reads_collected ?
-					 total_reads_collected *
-						 sizeof(*reads_buf) :
-					 reads_collected;
-			goto out;
-		}
-		if (copy_to_user(buf, reads_buf,
-				 reads_collected * sizeof(*reads_buf))) {
-			result = total_reads_collected ?
-					 total_reads_collected *
-						 sizeof(*reads_buf) :
-					 -EFAULT;
-			goto out;
-		}
-
-		memcpy(&log_state->state, &next_state, sizeof(next_state));
-		total_reads_collected += reads_collected;
-		buf += reads_collected * sizeof(*reads_buf);
-		reads_to_collect -= reads_collected;
-	}
-
-	result = total_reads_collected * sizeof(*reads_buf);
-	*ppos = 0;
-out:
-	if (reads_buf)
-		free_page((unsigned long)reads_buf);
-	return result;
+	return log_read(f,buf,len,ppos);
 }
 
 static __poll_t log_poll(struct file *file, poll_table *wait)
@@ -711,18 +616,7 @@ err:
 	return result;
 }
 
-static char *file_id_to_str(incfs_uuid_t id)
-{
-	char *result = kmalloc(1 + sizeof(id.bytes) * 2, GFP_NOFS);
-	char *end;
 
-	if (!result)
-		return NULL;
-
-	end = bin2hex(result, id.bytes, sizeof(id.bytes));
-	*end = 0;
-	return result;
-}
 
 static struct mem_range incfs_copy_signature_info_from_user(u8 __user *original,
 							    u64 size)
@@ -841,7 +735,7 @@ out:
 	return error;
 }
 
-static int incfs_link(struct dentry *what, struct dentry *where)
+int incfs_link(struct dentry *what, struct dentry *where)
 {
 	struct dentry *parent_dentry = dget_parent(where);
 	struct inode *pinode = d_inode(parent_dentry);
@@ -896,10 +790,11 @@ static void maybe_delete_incomplete_file(struct data_file *df)
 	if (!file_id_str)
 		return;
 
-	dir_f = dentry_open(base_path, O_RDONLY | O_NOATIME, current_cred());
-
-	if (IS_ERR(dir_f)) {
-		error = PTR_ERR(dir_f);
+	incomplete_file_dentry = incfs_lookup_dentry(
+					df->df_mount_info->mi_incomplete_dir,
+					file_id_str);
+	if (!incomplete_file_dentry || IS_ERR(incomplete_file_dentry)) {
+		incomplete_file_dentry = NULL;
 		goto out;
 	}
 

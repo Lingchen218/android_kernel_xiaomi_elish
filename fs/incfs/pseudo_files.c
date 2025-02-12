@@ -3,20 +3,12 @@
  * Copyright 2020 Google LLC
  */
 
-#include <linux/file.h>
-#include <linux/fs.h>
-#include <linux/namei.h>
-#include <linux/poll.h>
-#include <linux/syscalls.h>
 
-#include <uapi/linux/incrementalfs.h>
 
 #include "pseudo_files.h"
 
-#include "data_mgmt.h"
-#include "format.h"
-#include "integrity.h"
-#include "vfs.h"
+
+
 
 #define INCFS_PENDING_READS_INODE 2
 #define INCFS_LOG_INODE 3
@@ -32,10 +24,7 @@ static const struct mem_range log_file_name_range = {
 	.len = ARRAY_SIZE(log_file_name) - 1
 };
 
-/* State of an open .log file, unique for each file descriptor. */
-struct log_file_state {
-	struct read_log_state state;
-};
+
 
 static ssize_t log_read(struct file *f, char __user *buf, size_t len,
 			loff_t *ppos)
@@ -162,11 +151,6 @@ static const struct mem_range pending_reads_file_name_range = {
 	.len = ARRAY_SIZE(pending_reads_file_name) - 1
 };
 
-/* State of an open .pending_reads file, unique for each file descriptor. */
-struct pending_reads_state {
-	/* A serial number of the last pending read obtained from this file. */
-	int last_pending_read_sn;
-};
 
 static ssize_t pending_reads_read(struct file *f, char __user *buf, size_t len,
 			    loff_t *ppos)
@@ -460,7 +444,7 @@ static int init_new_file(struct mount_info *mi, struct dentry *dentry,
 		goto out;
 	}
 
-	bfc = incfs_alloc_bfc(new_file);
+	bfc = incfs_alloc_bfc(mi,new_file);
 	fput(new_file);
 	if (IS_ERR(bfc)) {
 		error = PTR_ERR(bfc);
@@ -779,7 +763,7 @@ static int init_new_mapped_file(struct mount_info *mi, struct dentry *dentry,
 		goto out;
 	}
 
-	bfc = incfs_alloc_bfc(new_file);
+	bfc = incfs_alloc_bfc(mi,new_file);
 	fput(new_file);
 	if (IS_ERR(bfc)) {
 		error = PTR_ERR(bfc);
