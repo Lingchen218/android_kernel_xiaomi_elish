@@ -502,10 +502,8 @@ static int tiocspgrp(struct tty_struct *tty, struct tty_struct *real_tty, pid_t 
 	if (session_of_pgrp(pgrp) != task_session(current))
 		goto out_unlock;
 	retval = 0;
-
 	put_pid(real_tty->pgrp);
 	real_tty->pgrp = get_pid(pgrp);
-
 out_unlock:
 	rcu_read_unlock();
 out_unlock_ctrl:
@@ -527,6 +525,9 @@ static int tiocgsid(struct tty_struct *tty, struct tty_struct *real_tty, pid_t _
 	unsigned long flags;
 	pid_t sid;
 
+	unsigned long flags;
+	pid_t sid;
+
 	/*
 	 * (tty == real_tty) is a cheap way of
 	 * testing if the tty is NOT a master pty.
@@ -535,7 +536,18 @@ static int tiocgsid(struct tty_struct *tty, struct tty_struct *real_tty, pid_t _
 		return -ENOTTY;
 
 	spin_lock_irqsave(&real_tty->ctrl_lock, flags);
+
+	spin_lock_irqsave(&real_tty->ctrl_lock, flags);
 	if (!real_tty->session)
+		goto err;
+	sid = pid_vnr(real_tty->session);
+	spin_unlock_irqrestore(&real_tty->ctrl_lock, flags);
+
+	return put_user(sid, p);
+
+err:
+	spin_unlock_irqrestore(&real_tty->ctrl_lock, flags);
+	return -ENOTTY;
 		goto err;
 	sid = pid_vnr(real_tty->session);
 	spin_unlock_irqrestore(&real_tty->ctrl_lock, flags);
