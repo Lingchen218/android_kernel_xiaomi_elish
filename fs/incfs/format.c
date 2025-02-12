@@ -94,7 +94,7 @@ static int truncate_backing_file(struct backing_file_context *bfc,
 static int write_to_bf(struct backing_file_context *bfc, const void *buf,
 			size_t count, loff_t pos)
 {
-	ssize_t res = incfs_kwrite(bfc->bc_file, buf, count, pos);
+	ssize_t res = incfs_kwrite(bfc, buf, count, pos);
 
 	if (res < 0)
 		return res;
@@ -103,7 +103,7 @@ static int write_to_bf(struct backing_file_context *bfc, const void *buf,
 	return 0;
 }
 
-static int append_zeros_no_fallocate(struct backing_file_context *bfc,
+__attribute__((unused)) static int append_zeros_no_fallocate(struct backing_file_context *bfc,
 				     size_t file_size, size_t len)
 {
 	u8 buffer[256] = {};
@@ -126,7 +126,7 @@ static int append_zeros(struct backing_file_context *bfc, size_t len)
 {
 	loff_t file_size = 0;
 	loff_t new_last_byte_offset = 0;
-	int result;
+	//int result;
 
 	if (!bfc)
 		return -EFAULT;
@@ -146,33 +146,22 @@ static int append_zeros(struct backing_file_context *bfc, size_t len)
 	return vfs_fallocate(bfc->bc_file, 0, new_last_byte_offset, 1);
 }
 
-static int write_to_bf(struct backing_file_context *bfc, const void *buf,
-			size_t count, loff_t pos)
-{
-	ssize_t res = incfs_kwrite(bfc, buf, count, pos);
 
-	if (res < 0)
-		return res;
-	if (res != count)
-		return -EIO;
-	return 0;
-}
-
-static u32 calc_md_crc(struct incfs_md_header *record)
+__attribute__((unused)) static u32 calc_md_crc(struct incfs_md_header *record)
 {
 	u32 result = 0;
-	__le32 saved_crc = record->h_record_crc;
+	__le32 saved_crc = record->h_unused1;
 	__le64 saved_md_offset = record->h_next_md_offset;
 	size_t record_size = min_t(size_t, le16_to_cpu(record->h_record_size),
 				INCFS_MAX_METADATA_RECORD_SIZE);
 
 	/* Zero fields which needs to be excluded from CRC calculation. */
-	record->h_record_crc = 0;
+	record->h_unused1 = 0;
 	record->h_next_md_offset = 0;
 	result = crc32(0, record, record_size);
 
 	/* Restore excluded fields. */
-	record->h_record_crc = saved_crc;
+	record->h_unused1 = saved_crc;
 	record->h_next_md_offset = saved_md_offset;
 
 	return result;
@@ -376,13 +365,13 @@ int incfs_write_status_to_backing_file(struct backing_file_context *bfc,
 		return write_new_status_to_backing_file(bfc,
 				data_blocks_written, hash_blocks_written);
 
-	result = incfs_kread(bfc->bc_file, &is, sizeof(is), status_offset);
+	result = incfs_kread(bfc, &is, sizeof(is), status_offset);
 	if (result != sizeof(is))
 		return -EIO;
 
 	is.is_data_blocks_written = cpu_to_le32(data_blocks_written);
 	is.is_hash_blocks_written = cpu_to_le32(hash_blocks_written);
-	result = incfs_kwrite(bfc->bc_file, &is, sizeof(is), status_offset);
+	result = incfs_kwrite(bfc, &is, sizeof(is), status_offset);
 	if (result != sizeof(is))
 		return -EIO;
 

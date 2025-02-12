@@ -10976,7 +10976,7 @@ static void __ufshcd_shutdown_clkscaling(struct ufs_hba *hba)
 		ufshcd_devfreq_remove(hba);
 }
 
-static void ufshcd_shutdown_clkscaling(struct ufs_hba *hba)
+__attribute__((unused)) static void ufshcd_shutdown_clkscaling(struct ufs_hba *hba)
 {
 	if (!ufshcd_is_clkscaling_supported(hba))
 		return;
