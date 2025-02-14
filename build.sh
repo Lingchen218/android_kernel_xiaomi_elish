@@ -9,6 +9,7 @@ set -e
 # git clone https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 -b android-10.0.0_r47 --depth=1
 # git clone https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 -b android-10.0.0_r47 --depth=1
 # git clone https://github.com/radcolor/arm-linux-gnueabi  --depth=1
+# git clone https://github.com/radcolor/aarch64-linux-gnu --depth=1
 # 参考内核编译教程 小米8 编译 MIUI 和LineageOs 教程 https://lyxot.github.io/blog/2023/08/09/%E7%BB%99%E5%B0%8F%E7%B1%B38SE(Sirius)%E7%BC%96%E8%AF%91%E5%86%85%E6%A0%B8/
 TOOLCHAIN_PATH=$HOME/android_prebuilts_clang_kernel_linux-x86_clang-r416183b/bin
 GIT_COMMIT_ID=$(git rev-parse --short=8 HEAD)
