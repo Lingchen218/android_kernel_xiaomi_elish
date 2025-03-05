@@ -166,6 +166,7 @@ mv $ZIP_FILENAME ../
 
 cd ..
 # 这个不用去编译miui
+rm -f anykernel/kernels/*
 exit 1
 echo "Build for AOSP finished."
 ### 
